@@ -1,0 +1,7 @@
+.venv/
+build/
+dist/
+*.spec
+*.log
+__pycache__/
+tools/wheels/

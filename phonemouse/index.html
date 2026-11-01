@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0f1115">
+<title>Phone Mouse</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;margin:0;padding:0}
+html,body{height:100%;background:#0f1115;color:#e8ebf1;font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;overflow:hidden;-webkit-touch-callout:none}
+#app{position:absolute;top:0;left:0;right:0;bottom:0}
+#bar{position:absolute;top:0;left:0;right:0;height:48px;padding:0 14px;display:-webkit-box;display:flex;-webkit-box-align:center;align-items:center}
+#dot{width:9px;height:9px;border-radius:5px;background:#f0b429;margin-right:8px}
+#status{font-size:13px;color:#9aa3b2;-webkit-box-flex:1;flex:1}
+.ib{background:#1b1f27;border:1px solid #2a303b;color:#e8ebf1;border-radius:10px;height:32px;padding:0 12px;font-size:14px;margin-left:8px}
+#pad{position:absolute;top:48px;left:10px;right:10px;bottom:150px;border-radius:18px;background:#161a21;background:-webkit-linear-gradient(top,#181c24,#13161c);background:linear-gradient(#181c24,#13161c);border:1px solid #232934;touch-action:none}
+#hint{position:absolute;top:50%;left:0;right:0;margin-top:-30px;text-align:center;color:#454d5c;font-size:13px;line-height:20px;pointer-events:none}
+#sens{position:absolute;left:14px;right:14px;bottom:100px;height:40px;display:-webkit-box;display:flex;-webkit-box-align:center;align-items:center;font-size:12px;color:#9aa3b2}
+#sens input{-webkit-box-flex:1;flex:1;margin:0 10px;width:60%}
+#btns{position:absolute;left:10px;right:10px;bottom:12px;height:82px;display:-webkit-box;display:flex}
+.mb{-webkit-box-flex:1;flex:1;width:50%;border-radius:16px;background:#1f2430;border:1px solid #2c3340;color:#c9d1de;font-size:15px;font-weight:600;letter-spacing:.5px}
+.mb.l{margin-right:5px}.mb.r{margin-left:5px}.mb.on{background:#2d6cdf;border-color:#2d6cdf;color:#fff}
+#kb{position:absolute;left:0;right:0;top:48px;padding:10px;display:none;background:#0f1115}
+#kb input{width:100%;height:44px;border-radius:12px;border:1px solid #2d6cdf;background:#1b1f27;color:#fff;font-size:16px;padding:0 12px;-webkit-user-select:text;user-select:text}
+</style></head><body><div id="app">
+<div id="bar"><div id="dot"></div><div id="status">Connecting…</div><button class="ib" id="kbbtn">⌨ Keys</button></div>
+<div id="pad"><div id="hint">Move: 1 finger · Tap: click<br>2-finger tap: right click · 2-finger drag: scroll<br>Double-tap &amp; hold: drag</div></div>
+<div id="kb"><input id="kbin" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Type here — sent to the computer"></div>
+<div id="sens"><span>Speed</span><input id="sl" type="range" min="1" max="10" step="1" value="5"><span id="sv">5</span></div>
+<div id="btns"><button class="mb l" id="lb">LEFT</button><button class="mb r" id="rb">RIGHT</button></div>
+</div>
+<script>
+(function(){
+var pin=(/[?&]pin=(\d+)/.exec(location.search)||[])[1]||"";
+var $=function(i){return document.getElementById(i)};
+var st=$("status"),dot=$("dot"),ws=null,useXhr=false,q=[],sending=false,wsFails=0;
+function setSt(t,c){st.innerHTML=t;dot.style.background=c}
+function J(o){return window.JSON?JSON.stringify(o):""}
+// ---- transport ----
+function connect(){
+  if(useXhr||!window.WebSocket){useXhr=true;setSt("Connected (compat mode)","#5ee38b");return}
+  var ok=false;
+  try{ws=new WebSocket((location.protocol=="https:"?"wss://":"ws://")+location.host+"/ws?pin="+pin)}catch(e){useXhr=true;return connect()}
+  var to=setTimeout(function(){if(!ok){try{ws.close()}catch(e){}}},4000);
+  ws.onopen=function(){ok=true;wsFails=0;clearTimeout(to);setSt("Connected","#5ee38b")};
+  ws.onclose=function(){clearTimeout(to);ws=null;if(!ok&&++wsFails>=2){useXhr=true;connect();return}
+    setSt("Reconnecting…","#f0b429");setTimeout(connect,1000)};
+  ws.onerror=function(){};
+}
+function post(){
+  if(sending||!q.length)return;sending=true;var b=q;q=[];
+  var x=new XMLHttpRequest();x.open("POST","/cmd?pin="+pin,true);
+  x.onreadystatechange=function(){if(x.readyState==4){sending=false;
+    if(x.status==200)setSt("Connected (compat mode)","#5ee38b");else setSt("Offline – retrying","#ef5350");
+    if(q.length)post()}};
+  x.send(J(b));
+}
+function send(o){
+  if(!useXhr&&ws&&ws.readyState==1){ws.send(J(o));return}
+  if(useXhr){q.push(o);post()}
+}
+// ---- movement with throttle + acceleration ----
+var sens=5,ax=0,ay=0,sx=0,sy=0,timer=null;
+try{var s0=localStorage.getItem("pm_s");if(s0){sens=+s0;$("sl").value=s0;$("sv").innerHTML=s0}}catch(e){}
+$("sl").onchange=$("sl").oninput=function(){sens=+this.value;$("sv").innerHTML=sens;try{localStorage.setItem("pm_s",sens)}catch(e){}};
+function flush(){timer=null;
+  var mx=Math.round(ax),my=Math.round(ay);
+  if(mx||my){ax-=mx;ay-=my;send({t:"m",x:mx,y:my})}
+  var cx=sx>0?Math.floor(sx):Math.ceil(sx),cy=sy>0?Math.floor(sy):Math.ceil(sy);
+  if(cx||cy){sx-=cx;sy-=cy;send({t:"s",x:cx,y:cy})}
+}
+function sched(){if(!timer)timer=setTimeout(flush,16)}
+function addMove(dx,dy,dt){
+  var v=Math.sqrt(dx*dx+dy*dy)/Math.max(dt,8); // px per ms
+  var g=(0.35+sens*0.17)*(1+Math.min(v,3)*1.1); // acceleration curve
+  ax+=dx*g;ay+=dy*g;sched();
+}
+// ---- gestures ----
+var pad=$("pad"),T={n:0,max:0,x:0,y:0,t0:0,lt:0,moved:0,dragging:false,sxp:0,syp:0},lastTap=0,pendingClick=null,maybeDrag=false;
+function pt(e,i){var t=e.touches[i];return{x:t.clientX,y:t.clientY}}
+function mid(e){var a=pt(e,0),b=pt(e,1);return{x:(a.x+b.x)/2,y:(a.y+b.y)/2}}
+pad.addEventListener("touchstart",function(e){e.preventDefault();var n=e.touches.length;
+  var now=+new Date;
+  if(n==1){T.max=1;T.moved=0;T.t0=T.lt=now;var p=pt(e,0);T.x=p.x;T.y=p.y;
+    if(pendingClick&&now-lastTap<300){clearTimeout(pendingClick);pendingClick=null;maybeDrag=true;
+      T.holdT=setTimeout(function(){if(maybeDrag){T.dragging=true;send({t:"d",b:"left"});setSt("Dragging…","#2d6cdf")}},180)}
+  }else if(n==2){T.max=2;var m=mid(e);T.sxp=m.x;T.syp=m.y;clearTimeout(T.holdT);maybeDrag=false}
+  else T.max=Math.max(T.max,n);
+},false);
+pad.addEventListener("touchmove",function(e){e.preventDefault();var n=e.touches.length,now=+new Date;
+  if(n==1&&T.max==1){var p=pt(e,0),dx=p.x-T.x,dy=p.y-T.y;T.moved+=Math.abs(dx)+Math.abs(dy);T.x=p.x;T.y=p.y;
+    if(maybeDrag&&!T.dragging&&T.moved>6){clearTimeout(T.holdT);T.dragging=true;send({t:"d",b:"left"})}
+    addMove(dx,dy,now-T.lt);T.lt=now}
+  else if(n==2){var m=mid(e),dy=m.y-T.syp,dx=m.x-T.sxp;T.moved+=Math.abs(dx)+Math.abs(dy);T.sxp=m.x;T.syp=m.y;
+    sy+=-dy*0.12*(0.5+sens/5);sx+=dx*0.12*(0.5+sens/5);sched()}
+},false);
+function end(e){e.preventDefault();if(e.touches.length)return;var now=+new Date,dur=now-T.t0;clearTimeout(T.holdT);
+  if(T.dragging){T.dragging=false;maybeDrag=false;flush();send({t:"u",b:"left"});setSt("Connected","#5ee38b");return}
+  if(T.max==2&&T.moved<20&&dur<350){send({t:"c",b:"right"})}
+  else if(T.max==1&&T.moved<10&&dur<250){
+    if(maybeDrag){maybeDrag=false;send({t:"c",b:"left",n:2});return} // double tap = double click... handled as 2nd click
+    lastTap=now;pendingClick=setTimeout(function(){pendingClick=null;send({t:"c",b:"left"})},260)}
+  maybeDrag=false;
+}
+pad.addEventListener("touchend",end,false);pad.addEventListener("touchcancel",end,false);
+// mouse fallback (desktop testing)
+var md=false,mx0,my0,mt;
+pad.onmousedown=function(e){md=true;mx0=e.clientX;my0=e.clientY;mt=+new Date};
+pad.onmousemove=function(e){if(md){var n=+new Date;addMove(e.clientX-mx0,e.clientY-my0,n-mt);mx0=e.clientX;my0=e.clientY;mt=n}};
+pad.onmouseup=function(){md=false};
+// buttons: press/release so they can hold for drag
+function hb(el,b){var on=function(e){e.preventDefault();el.className+=" on";send({t:"d",b:b})},
+  off=function(e){e.preventDefault();el.className=el.className.replace(" on","");send({t:"u",b:b})};
+  el.addEventListener("touchstart",on,false);el.addEventListener("touchend",off,false);
+  el.onmousedown=on;el.onmouseup=off}
+hb($("lb"),"left");hb($("rb"),"right");
+// keyboard
+var kb=$("kb"),ki=$("kbin");
+$("kbbtn").onclick=function(){if(kb.style.display=="block"){kb.style.display="none";ki.blur()}else{kb.style.display="block";ki.focus()}};
+ki.onkeydown=function(e){var k=e.keyCode;
+  if(k==13){if(ki.value){send({t:"k",s:ki.value});ki.value=""}else send({t:"key",k:"enter"});e.preventDefault()}
+  else if(k==8&&!ki.value){send({t:"key",k:"backspace"})}};
+ki.oninput=function(){var v=ki.value;if(v.length&&/\s$/.test(v)){send({t:"k",s:v});ki.value=""}};
+document.addEventListener("gesturestart",function(e){e.preventDefault()},false);
+connect();
+})();
+</script></body></html>
